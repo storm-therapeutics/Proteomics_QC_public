@@ -1,0 +1,177 @@
+---
+title: Proteomics QC Report
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float:
+      collapsed: false
+      smooth_scroll: false
+params:
+    data: merged.mzTab
+---
+
+```{r include=FALSE}
+knitr::opts_chunk$set(echo=FALSE)
+library(MSnbase)
+library(ggplot2)
+library(tidyr)
+library(knitr)
+library(pheatmap)
+library(grid)
+## ggplot theme:
+theme_set(theme_bw() + theme(plot.title=element_text(hjust=0.5, face="bold"), plot.subtitle=element_text(hjust=0.5)))
+
+data <- MzTab(params$data)
+meta <- data@Metadata
+psms <- data@PSMs
+pep <- data@Peptides
+prot <- data@Proteins
+inputs <- unlist(meta[grep("ms_run\\[\\d+\\]-location", names(meta))])
+```
+
+`r Sys.time()`
+
+## General information
+
+Input file: `r normalizePath(params$data)`
+
+**`r length(inputs)`** samples processed:
+
+```{r results="asis"}
+samples <- sub("file://(.*)\\.[^\\.]+", "\\1", inputs)
+cat(paste("#.", samples), sep="\n")
+```
+
+## Identification level
+
+Max. q-value (PSM level): `r round(max(psms$"opt_global_q-value", na.rm=TRUE), 3)`
+
+### Identification metrics and rates
+
+```{r}
+## count MS2 spectra:
+n.ms2 <- as.integer(unlist(meta[grep("ms_run\\[\\d+\\]-num_ms2", names(meta))]))
+## count PSMs:
+run.ids <- as.integer(sub("^ms_run\\[(\\d+)\\]:.*", "\\1", psms$spectra_ref))
+n.psms <- as.data.frame(table(factor(run.ids, levels=seq_along(inputs))))
+names(n.psms) <- c("sample", "count")
+n.psms$quantity <- "PSMs"
+counts <- rbind(data.frame(count=n.ms2, sample=seq_along(n.ms2), quantity="MS2 spectra"), n.psms)
+## count peptides:
+cols <- paste0("search_engine_score[1]_ms_run[", seq_along(inputs), "]")
+n.peps <- apply(pep[, cols], 2, function(col) sum(!is.na(col)))
+counts <- rbind(counts, data.frame(count=n.peps, sample=seq_along(n.peps),
+                                   quantity="charged peptides\n(incl. mods)"))
+## unique peptides:
+n.unique <- sapply(cols, function(col) {return
+    part <- pep[!is.na(pep[[col]]), c("sequence", "modifications")]
+    c(nrow(unique(part)), length(unique(part$sequence)))
+})
+n.unique <- data.frame(count=as.integer(n.unique), sample=rep(seq_along(inputs), each=2),
+                       quantity=c("unique peptides\n(incl. mods)", "unique peptides\n(w/o mods)"))
+counts <- rbind(counts, n.unique)
+## ensure proper ordering:
+counts$sample <- factor(counts$sample, levels=seq_along(inputs))
+counts$quantity <- factor(counts$quantity, levels=c("MS2 spectra", "PSMs", "charged peptides\n(incl. mods)",
+                                                    "unique peptides\n(incl. mods)", "unique peptides\n(w/o mods)"))
+
+ggplot(counts) +
+    geom_col(aes(sample, count, fill=quantity), position="dodge") +
+    labs(title="Identification metrics")
+```
+
+```{r}
+table <- pivot_wider(counts, names_from=quantity, values_from=count)
+table$"id. rate (%)" <- table$PSMs / table$"MS2 spectra" * 100
+ggplot(table) +
+    geom_col(aes(sample, `id. rate (%)`)) +
+    labs(title="Fraction of MS2 spectra identified", subtitle="(subject to q-value threshold)")
+```
+
+```{r results="asis"}
+names(table) <- gsub("\n", "<br />", names(table)) # fix line breaks for HTML output
+kable(table, digits=1) # caption="Table of identification-related metrics"
+```
+
+```{r}
+## retention times:
+min.samples <- 3 # min. number of samples a peptide must be identified in to be used
+outlier.pct <- 1 # percentage of outliers to be removed
+rt.data <- psms[, c("sequence", "modifications", "retention_time")]
+rt.data$sample <- factor(run.ids, levels=seq_along(inputs))
+rt.data <- pivot_wider(rt.data, names_from=sample, values_from=retention_time, values_fn=median)
+n.samples <- apply(rt.data[, -(1:2)], 1, function(row) sum(!is.na(row)))
+## how many times was each (modified) peptide identified?
+table.mod <- table(n.samples)
+table.unmod <- table(tapply(run.ids, psms$sequence, function(ids) length(unique(ids))))
+cum.data <- rbind(data.frame(count=as.integer(table.mod), quantity="unique peptides\n(incl. mods)"),
+                  data.frame(count=as.integer(table.unmod), quantity="unique peptides\n(w/o mods)"))
+cum.data$samples <- factor(c(names(table.mod), names(table.unmod)), levels=seq_along(inputs))
+ggplot(cum.data) +
+    geom_col(aes(samples, count, fill=quantity), position="dodge") +
+  labs(title="Cumulative identification of peptides across multiple samples")
+```
+
+### Chromatography
+
+```{r message=FALSE, warning=FALSE}
+## back to retention times:
+rt.part <- rt.data[n.samples >= min.samples, ]
+rt.part$median_rt <- apply(rt.part[, -(1:2)], 1, median, na.rm=TRUE)
+rt.part <- pivot_longer(rt.part, as.character(seq_along(inputs)), names_to="sample", values_to="rt",
+                        values_drop_na=TRUE)
+rt.part$rt_diff <- rt.part$rt - rt.part$median_rt
+rt.part$sample <- factor(rt.part$sample, levels=seq_along(inputs))
+outlier.frac <- outlier.pct / 200
+ggplot(rt.part, aes(median_rt, rt_diff, color=sample)) +
+    geom_point(shape=".") +
+    geom_smooth(size=0.5) +
+    ylim(quantile(rt.part$rt_diff, c(outlier.frac, 1 - outlier.frac))) +
+    labs(x="median RT (s)", y="RT deviation (s)", title="Retention times of identified peptides")
+```
+
+The median retention time (RT) of a peptide in each sample is compared to its median RT across all samples.
+Only peptides identified in at least `r min.samples` samples are considered.
+For scaling purposes, `r outlier.pct`% of outliers in terms of RT deviation were excluded from the plot.
+
+
+## Quantification level
+
+### Peptides
+
+```{r}
+pattern <- "^peptide_abundance_study_variable\\[(\\d+)\\]$"
+ab.cols <- grep(pattern, names(pep), value=TRUE)
+pep.ab <- pep[, ab.cols]
+names(pep.ab) <- sub(pattern, "\\1", ab.cols)
+plot.data <- pivot_longer(pep.ab, 1:ncol(pep.ab), names_to="sample", values_to="abundance",
+                          values_drop_na=TRUE)
+plot.data$sample <- factor(plot.data$sample, levels=seq_along(inputs))
+ggplot(plot.data) +
+  geom_density(aes(log10(abundance), color=sample)) +
+  labs(title="Distribution of peptide abundances", subtitle="(incl. charges and modifications)")
+```
+
+### Proteins
+
+```{r fig.height=10}
+pattern <- "^protein_abundance_study_variable\\[(\\d+)\\]$"
+ab.cols <- grep(pattern, names(prot), value=TRUE)
+ind <- prot$opt_global_result_type != "protein_details"
+prot.ab <- as.matrix(prot[ind, ab.cols])
+colnames(prot.ab) <- sub(pattern, "\\1", ab.cols)
+rownames(prot.ab) <- paste0(prot$accession[ind],
+                            ifelse(prot$opt_global_result_type[ind] == "indistinguishable_protein_group", "*", ""))
+n.samples <- apply(prot.ab, 1, function(row) sum(!is.na(row)))
+min.samples <- ceiling(ncol(prot.ab) / 2) # require quantification in at least half the samples
+ind <- n.samples >= min.samples
+plot.data <- log10(prot.ab[ind, ])
+ord <- order(rowSums(plot.data, na.rm=TRUE), decreasing=TRUE)
+## just calling "pheatmap" doesn't produce output in the HTML file:
+p <- pheatmap(plot.data[ord, ], cluster_rows=FALSE, cluster_cols=FALSE, angle_col=0, fontsize_row=2,
+              main="Protein abundances (log-scale)")
+grid.draw(p$gtable)
+```
+
+Abundances are shown for **`r nrow(plot.data)`** proteins (or ambiguity groups) that were quantified in at least half of all samples (i.e. min. `r min.samples` samples).
