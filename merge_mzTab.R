@@ -1,10 +1,4 @@
-#!/usr/bin/env Rscript
-
 library(MSnbase)
-
-find.mztab.files <- function(base.dir, pattern="\\.mzTab$") {
-  list.files(base.dir, pattern, recursive=TRUE, full.names=TRUE)
-}
 
 make.pattern <- function(prefix) {
   ## escape characters that would have special meaning in reg. exp.:
@@ -42,6 +36,10 @@ select.non.missing <- function(values) {
     values[2]
   else
     values[1]
+}
+
+paste.non.missing <- function(values, sep="|") {
+  paste(na.omit(values), collapse=sep)
 }
 
 min.or.na <- function(values) {
@@ -103,8 +101,9 @@ collapse.peptide.rows <- function(mztab) {
                           names(pep))
   min.fields <- c(min.fields, grep("search_engine_score", names(pep), value=TRUE))
   ## fields to combine via "paste":
+  ## TODO: avoid conversion of "opt_global_feature_id" values to floating point numbers
   paste.fields <- intersect(c("spectra_ref", "retention_time", "opt_global_feature_id"), names(pep))
-  ## number of study variables:                
+  ## number of study variables:
   n.vars <- get.max.index(names(pep), "peptide_abundance_study_variable")
   parts <- lapply(parts, function(part) {
     if (nrow(part) == 1)
@@ -144,7 +143,7 @@ move.psm.columns <- function(mztab) {
   ## columns to remove from PSM section:
   rm.cols <- c("accession", "unique", "database", "database_version", "calc_mass_to_charge", "pre", "post", "start", "end", "opt_global_cv_MS:1002217_decoy_peptide")
   sel.cols <- c("sequence", "modifications", "charge", rm.cols)
-  if (.hasSlot(mztab, "Peptides")) { # don't care about the scores
+  if (.hasSlot(mztab, "Peptides")) { # don't care about the scores on PSM level
     parts <- lapply(parts, function(part) part[1, sel.cols])
   } else { # select row with best score per modified sequence:
     sel.cols <- c(sel.cols, "search_engine_score[1]")
@@ -157,6 +156,9 @@ move.psm.columns <- function(mztab) {
     pep <- merge(pep, part, by=c("sequence", "modifications", "charge"), all.x=TRUE)
     for (col in c("unique", "database", "database_version", "opt_global_cv_MS:1002217_decoy_peptide"))
       pep <- combine.columns(pep, col)
+    ## move "opt_..." columns to the end:
+    opt.cols <- grepl("^opt_", names(pep))
+    pep <- pep[, c(which(!opt.cols), which(opt.cols))]
     mztab@Peptides <- pep
   } else { # create new PEP section
     names(part)[length(names(part))] <- "best_search_engine_score[1]"
@@ -263,9 +265,6 @@ merge.mztab.proteins <- function(prot1, prot2,
   for (col in intersect(cols1, cols2)) {
     merged <- combine.columns(merged, col)
   }
-  ## move "opt_..." columns to the end:
-  opt.cols <- grep("^opt_", names(merged), value=TRUE)
-  merged <- merged[, c(setdiff(names(merged), opt.cols), opt.cols)]
   merged
 }
 
@@ -290,7 +289,7 @@ merge.mztab.peptides <- function(pep1, pep2, variable.fields=c("search_engine_sc
   merged <- combine.columns(merged, field, min, na.rm=TRUE)
   }
   for (field in c("spectra_ref", "retention_time", "opt_global_feature_id")) {
-    merged <- combine.columns(merged, field, paste, collapse="|")
+    merged <- combine.columns(merged, field, paste.non.missing)
   }
   fields <- grep("^opt_global_mass_to_charge_study_variable", names(merged))
   if (length(fields) > 0) { # recalculate overall mass-to-charge
@@ -318,9 +317,10 @@ merge.mztab.psms <- function(psms1, psms2) {
   offset <- get.max.index(psms1$spectra_ref, "ms_run")
   psms2$spectra_ref <- adjust.indexes(psms2$spectra_ref, "ms_run", offset)
   ## adjust index in "opt_global_map_index" column:
+  ## ("..._map_index" is NA if "..._feature_id" is "not mapped")
   col <- "opt_global_map_index"
   if ((col %in% names(psms1)) && (col %in% names(psms2)))
-    psms2[[col]] <- psms2[[col]] + max(psms1[[col]]) + 1 # index starts at 0
+    psms2[[col]] <- psms2[[col]] + max(psms1[[col]], na.rm=TRUE) + 1 # index starts at 0
   rbind(psms1, psms2)
 }
 
@@ -337,20 +337,24 @@ merge.mztab.data <- function(mztab1, mztab2) {
 }
 
 
+load.mztab.file <- function(path) {
+  mztab <- MzTab(path)
+  mztab <- collapse.protein.rows(mztab)
+  if (.hasSlot(mztab, "Peptides"))
+    mztab <- collapse.peptide.rows(mztab)
+  mztab <- move.psm.columns(mztab)
+  mztab
+}
+
+
 merge.mztab.files <- function(paths) {
   if (length(paths) == 0)
     stop("list of input paths is empty")
   cat("Working on file", paths[1], "\n")
-  merged <- MzTab(paths[1])
-  merged <- collapse.protein.rows(merged)
-  merged <- collapse.peptide.rows(merged)
-  merged <- move.psm.columns(merged)
+  merged <- load.mztab.file(paths[1])
   for (path in paths[-1]) {
     cat("Working on file", path, "\n")
-    mztab <- MzTab(path)
-    mztab <- collapse.protein.rows(mztab)
-    mztab <- collapse.peptide.rows(mztab)
-    mztab <- move.psm.columns(mztab)
+    mztab <- load.mztab.file(path)
     merged <- merge.mztab.data(merged, mztab)
   }
   cat("Done.\n")
