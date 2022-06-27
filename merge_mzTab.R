@@ -139,9 +139,11 @@ move.psm.columns <- function(mztab) {
   if (!.hasSlot(mztab, "PSMs"))
     return(mztab)
   psms <- mztab@PSMs
-  parts <- split(psms, list(psms$sequence, psms$modifications, psms$charge), drop=TRUE)
   ## columns to remove from PSM section:
   rm.cols <- c("accession", "unique", "database", "database_version", "calc_mass_to_charge", "pre", "post", "start", "end", "opt_global_cv_MS:1002217_decoy_peptide")
+  if (!any(rm.cols %in% names(psms))) # columns were moved previously
+    return(mztab)
+  parts <- split(psms, list(psms$sequence, psms$modifications, psms$charge), drop=TRUE)
   sel.cols <- c("sequence", "modifications", "charge", rm.cols)
   if (.hasSlot(mztab, "Peptides")) { # don't care about the scores on PSM level
     parts <- lapply(parts, function(part) part[1, sel.cols])
