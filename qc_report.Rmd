@@ -47,17 +47,33 @@ cat(paste("#.", samples), sep="\n")
 
 Max. q-value (PSM level): `r round(max(psms$"opt_global_q-value", na.rm=TRUE), 3)`
 
-### Identification metrics and rates
+### PSM and peptide metrics
 
-```{r}
+```{r fig.show="hold", fig.width=4, out.width="50%"}
 ## count MS2 spectra:
 n.ms2 <- as.integer(unlist(meta[grep("ms_run\\[\\d+\\]-num_ms2", names(meta))]))
 ## count PSMs:
 run.ids <- as.integer(sub("^ms_run\\[(\\d+)\\]:.*", "\\1", psms$spectra_ref))
-n.psms <- as.data.frame(table(factor(run.ids, levels=seq_along(inputs))))
-names(n.psms) <- c("sample", "count")
-n.psms$quantity <- "PSMs"
-counts <- rbind(data.frame(count=n.ms2, sample=seq_along(n.ms2), quantity="MS2 spectra"), n.psms)
+n.psms <- table(factor(run.ids, levels=seq_along(inputs)))
+
+id.rates <- as.numeric(n.psms / n.ms2)
+plot.data <- data.frame(sample=factor(names(n.psms), levels=seq_along(inputs)),
+                        "MS2 spectra"=n.ms2, "PSMs"=as.integer(n.psms),
+                        "id. rate (%)"=id.rates * 100, check.names=FALSE)
+
+ggplot(plot.data) +
+  geom_col(aes(sample, `MS2 spectra`)) +
+  labs(title="Number of MS2 spectra acquired")
+
+ggplot(plot.data) +
+  geom_col(aes(sample, `id. rate (%)`)) +
+  labs(title="Fraction of MS2 spectra identified", subtitle="(subject to q-value threshold)")
+```
+
+```{r}
+counts <- plot.data[, c("sample", "PSMs")]
+names(counts)[2] <- "count"
+counts$quantity <- "PSMs"
 ## count peptides:
 cols <- paste0("search_engine_score[1]_ms_run[", seq_along(inputs), "]")
 n.peps <- apply(pep[, cols], 2, function(col) sum(!is.na(col)))
@@ -73,23 +89,17 @@ n.unique <- data.frame(count=as.integer(n.unique), sample=rep(seq_along(inputs),
 counts <- rbind(counts, n.unique)
 ## ensure proper ordering:
 counts$sample <- factor(counts$sample, levels=seq_along(inputs))
-counts$quantity <- factor(counts$quantity, levels=c("MS2 spectra", "PSMs", "charged peptides\n(incl. mods)",
+counts$quantity <- factor(counts$quantity, levels=c("PSMs", "charged peptides\n(incl. mods)",
                                                     "unique peptides\n(incl. mods)", "unique peptides\n(w/o mods)"))
 
 ggplot(counts) +
     geom_col(aes(sample, count, fill=quantity), position="dodge") +
-    labs(title="Identification metrics")
-```
-
-```{r}
-table <- pivot_wider(counts, names_from=quantity, values_from=count)
-table$"id. rate (%)" <- table$PSMs / table$"MS2 spectra" * 100
-ggplot(table) +
-    geom_col(aes(sample, `id. rate (%)`)) +
-    labs(title="Fraction of MS2 spectra identified", subtitle="(subject to q-value threshold)")
+    labs(title="PSM and peptide counts")
 ```
 
 ```{r results="asis"}
+table <- pivot_wider(counts, names_from="quantity", values_from="count")
+table <- cbind(plot.data[, -3], table[, -1])
 names(table) <- gsub("\n", "<br />", names(table)) # fix line breaks for HTML output
 kable(table, digits=1) # caption="Table of identification-related metrics"
 ```
