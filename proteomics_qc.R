@@ -35,13 +35,14 @@ for (arg in args) {
     stop("No such directory: ", arg)
 }
 
-cat("Loading functions...\n")
-suppressMessages(source(file.path(script.dir, "merge_mzTab.R")))
-
 if (length(args) > 0) {
+  cat("Loading functions...\n")
+  suppressMessages(source(file.path(script.dir, "merge_mzTab.R")))
+
   samples <- sub("^results_", "", basename(args))
 
   ## count number of MS2 spectra in each input file:
+  ## (relevant line in mzML: <cvParam cvRef="MS" accession="MS:1000580" name="MSn spectrum" />)
   mzml.dir <- "mzmlindexing/out"
   n.ms2 <- sapply(args, function(dir) system2("grep", c("-c", "MS:1000580", file.path(dir, mzml.dir, "*.mzML")),
                                               stdout=TRUE))
