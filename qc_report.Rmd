@@ -47,8 +47,6 @@ cat(paste("#.", samples), sep="\n")
 
 Max. q-value (PSM level): `r round(max(psms$"opt_global_q-value", na.rm=TRUE), 3)`
 
-### PSM and peptide metrics
-
 ```{r fig.show="hold", fig.width=4, out.width="50%"}
 ## count MS2 spectra:
 n.ms2 <- as.integer(unlist(meta[grep("ms_run\\[\\d+\\]-num_ms2", names(meta))]))
@@ -87,24 +85,33 @@ n.unique <- sapply(cols, function(col) {return
 n.unique <- data.frame(count=as.integer(n.unique), sample=rep(seq_along(inputs), each=2),
                        quantity=c("unique peptides\n(incl. mods)", "unique peptides\n(w/o mods)"))
 counts <- rbind(counts, n.unique)
+## count proteins:
+cols <- paste0("search_engine_score[1]_ms_run[", seq_along(inputs), "]")
+## don't count proteins inside ambiguity groups ("ambiguity_members" is NA):
+n.prots <- apply(prot[!is.na(prot$ambiguity_members), cols], 2, function(col) sum(!is.na(col)))
+counts <- rbind(counts, data.frame(count=n.prots, sample=seq_along(n.peps),
+                                   quantity="protein groups"))
 ## ensure proper ordering:
 counts$sample <- factor(counts$sample, levels=seq_along(inputs))
 counts$quantity <- factor(counts$quantity, levels=c("PSMs", "charged peptides\n(incl. mods)",
-                                                    "unique peptides\n(incl. mods)", "unique peptides\n(w/o mods)"))
+                                                    "unique peptides\n(incl. mods)", "unique peptides\n(w/o mods)",
+                                                    "protein groups"))
 
 ggplot(counts) +
     geom_col(aes(sample, count, fill=quantity), position="dodge") +
-    labs(title="PSM and peptide counts")
+    labs(title="PSM/peptide/protein counts")
 ```
 
 ```{r results="asis"}
 table <- pivot_wider(counts, names_from="quantity", values_from="count")
 table <- cbind(plot.data[, -3], table[, -1])
-names(table) <- gsub("\n", "<br />", names(table)) # fix line breaks for HTML output
+names(table) <- gsub("\n", "<br/>", names(table)) # fix line breaks for HTML output
 kable(table, digits=1) # caption="Table of identification-related metrics"
 ```
 
-```{r}
+### Chromatography
+
+```{r message=FALSE, warning=FALSE}
 ## retention times:
 min.samples <- 3 # min. number of samples a peptide must be identified in to be used
 outlier.pct <- 1 # percentage of outliers to be removed
@@ -112,21 +119,6 @@ rt.data <- psms[, c("sequence", "modifications", "retention_time")]
 rt.data$sample <- factor(run.ids, levels=seq_along(inputs))
 rt.data <- pivot_wider(rt.data, names_from=sample, values_from=retention_time, values_fn=median)
 n.samples <- apply(rt.data[, -(1:2)], 1, function(row) sum(!is.na(row)))
-## how many times was each (modified) peptide identified?
-table.mod <- table(n.samples)
-table.unmod <- table(tapply(run.ids, psms$sequence, function(ids) length(unique(ids))))
-cum.data <- rbind(data.frame(count=as.integer(table.mod), quantity="unique peptides\n(incl. mods)"),
-                  data.frame(count=as.integer(table.unmod), quantity="unique peptides\n(w/o mods)"))
-cum.data$samples <- factor(c(names(table.mod), names(table.unmod)), levels=seq_along(inputs))
-ggplot(cum.data) +
-    geom_col(aes(samples, count, fill=quantity), position="dodge") +
-  labs(title="Cumulative identification of peptides across multiple samples")
-```
-
-### Chromatography
-
-```{r message=FALSE, warning=FALSE}
-## back to retention times:
 rt.part <- rt.data[n.samples >= min.samples, ]
 rt.part$median_rt <- apply(rt.part[, -(1:2)], 1, median, na.rm=TRUE)
 rt.part <- pivot_longer(rt.part, as.character(seq_along(inputs)), names_to="sample", values_to="rt",
@@ -151,26 +143,33 @@ For scaling purposes, `r outlier.pct`% of outliers in terms of RT deviation were
 ### Peptides
 
 ```{r}
-pattern <- "^peptide_abundance_study_variable\\[(\\d+)\\]$"
-ab.cols <- grep(pattern, names(pep), value=TRUE)
-pep.ab <- pep[, ab.cols]
-names(pep.ab) <- sub(pattern, "\\1", ab.cols)
-plot.data <- pivot_longer(pep.ab, 1:ncol(pep.ab), names_to="sample", values_to="abundance",
-                          values_drop_na=TRUE)
-plot.data$sample <- factor(plot.data$sample, levels=seq_along(inputs))
-ggplot(plot.data) +
-  geom_density(aes(log10(abundance), color=sample)) +
-  labs(title="Distribution of peptide abundances", subtitle="(incl. charges and modifications)")
+plot.abundance.distributions <- function(data.part, col.pattern, title, subtitle=NULL) {
+  ab.cols <- grep(col.pattern, names(data.part), value=TRUE)
+  ab.data <- data.part[, ab.cols]
+  names(ab.data) <- sub(col.pattern, "\\1", ab.cols)
+  plot.data <- pivot_longer(ab.data, 1:ncol(ab.data), names_to="sample", values_to="abundance",
+                            values_drop_na=TRUE)
+  plot.data$sample <- factor(plot.data$sample, levels=seq_along(inputs))
+  plot <- ggplot(plot.data) +
+    geom_density(aes(log10(abundance), color=sample)) +
+    labs(title=title, subtitle=subtitle)
+  print(plot)
+  invisible(ab.data)
+}
+
+plot.abundance.distributions(pep, "^peptide_abundance_study_variable\\[(\\d+)\\]$",
+                             "Distribution of peptide abundances", "(incl. charges and modifications)")
 ```
 
 ### Proteins
 
-```{r fig.height=10}
-pattern <- "^protein_abundance_study_variable\\[(\\d+)\\]$"
-ab.cols <- grep(pattern, names(prot), value=TRUE)
+```{r}
 ind <- prot$opt_global_result_type != "protein_details"
-prot.ab <- as.matrix(prot[ind, ab.cols])
-colnames(prot.ab) <- sub(pattern, "\\1", ab.cols)
+prot.ab <- plot.abundance.distributions(prot[ind, ], "^protein_abundance_study_variable\\[(\\d+)\\]$",
+                                        "Distribution of protein (group) abundances")
+
+## heatmap:
+prot.ab <- as.matrix(prot.ab)
 rownames(prot.ab) <- paste0(prot$accession[ind],
                             ifelse(prot$opt_global_result_type[ind] == "indistinguishable_protein_group", "*", ""))
 n.samples <- apply(prot.ab, 1, function(row) sum(!is.na(row)))
@@ -178,10 +177,27 @@ min.samples <- ceiling(ncol(prot.ab) / 2) # require quantification in at least h
 ind <- n.samples >= min.samples
 plot.data <- log10(prot.ab[ind, ])
 ord <- order(rowSums(plot.data, na.rm=TRUE), decreasing=TRUE)
-## just calling "pheatmap" doesn't produce output in the HTML file:
-p <- pheatmap(plot.data[ord, ], cluster_rows=FALSE, cluster_cols=FALSE, angle_col=0, fontsize_row=2,
-              main="Protein abundances (log-scale)")
-grid.draw(p$gtable)
+heatmap_height <- sum(ind) / 10
 ```
 
+### Heatmap of protein abundances (log-scale)
+
+```{css}
+.with-scrollbar {
+    overflow-y: scroll;
+    max-height: 400px;
+}
+```
+
+<div class="with-scrollbar">
+```{r fig.height=heatmap_height}
+## using chunk option 'class.output="with-scrollbar"' (instead of '<div>') doesn't work for some reason
+
+## just calling "pheatmap" doesn't produce output in the HTML file:
+p <- pheatmap(plot.data[ord, ], cluster_rows=FALSE, cluster_cols=FALSE, angle_col=0, fontsize_row=6)
+grid.draw(p$gtable)
+```
+</div>
+
+<br/>
 Abundances are shown for **`r nrow(plot.data)`** proteins (or ambiguity groups) that were quantified in at least half of all samples (i.e. min. `r min.samples` samples).
