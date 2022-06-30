@@ -59,6 +59,18 @@ combine.columns <- function(merged, field, fun=select.non.missing, ...) {
 }
 
 
+add.protein.run.scores <- function(mztab) {
+  n.runs <- get.max.index(names(mztab@Metadata), "ms_run")
+  for (n in 1:n.runs) {
+    col <- paste0("search_engine_score[1]_ms_run[", n, "]")
+    if (!(col %in% names(mztab@Proteins))) {
+      mztab@Proteins[[col]] <- mztab@Proteins$"best_search_engine_score[1]"
+    }
+  }
+  mztab
+}
+
+
 collapse.protein.rows <- function(mztab) {
   prot <- mztab@Proteins
   if (!any(duplicated(prot$accession)))
@@ -238,7 +250,7 @@ merge.mztab.metadata <- function(meta1, meta2, variable.fields=c("ms_run", "assa
 
 
 merge.mztab.proteins <- function(prot1, prot2,
-                                 variable.fields=c("protein_abundance_assay", "protein_abundance_study_variable", "protein_abundance_stdev_study_variable", "protein_abundance_std_error_study_variable")) {
+                                 variable.fields=c("protein_abundance_assay", "protein_abundance_study_variable", "protein_abundance_stdev_study_variable", "protein_abundance_std_error_study_variable", "search_engine_score[1]_ms_run")) {
   for (field in variable.fields) {
     offset <- get.max.index(names(prot1), field)
     if (!is.null(offset)) {
@@ -327,9 +339,13 @@ merge.mztab.psms <- function(psms1, psms2) {
 }
 
 
-
 ## Merge data from `mztab2` into `mztab1`
 merge.mztab.data <- function(mztab1, mztab2) {
+  ## add columns for "search_engine_score[1]_ms_run[...]" to protein sections
+  ## (to keep track of in which runs proteins were identified):
+  mztab1 <- add.protein.run.scores(mztab1)
+  mztab2 <- add.protein.run.scores(mztab2)
+
   mztab1@Metadata <- merge.mztab.metadata(mztab1@Metadata, mztab2@Metadata)
   mztab1@Proteins <- merge.mztab.proteins(mztab1@Proteins, mztab2@Proteins)
   mztab1@Peptides <- merge.mztab.peptides(mztab1@Peptides, mztab2@Peptides)
