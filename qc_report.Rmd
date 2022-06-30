@@ -47,7 +47,7 @@ cat(paste("#.", samples), sep="\n")
 
 Max. q-value (PSM level): `r round(max(psms$"opt_global_q-value", na.rm=TRUE), 3)`
 
-```{r fig.show="hold", fig.width=4, out.width="50%"}
+```{r fig.show="hold", fig.width=4, fig.height=4, out.width="50%"}
 ## count MS2 spectra:
 n.ms2 <- as.integer(unlist(meta[grep("ms_run\\[\\d+\\]-num_ms2", names(meta))]))
 ## count PSMs:
