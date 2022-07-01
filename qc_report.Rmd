@@ -113,7 +113,7 @@ kable(table, digits=1) # caption="Table of identification-related metrics"
 
 ```{r message=FALSE, warning=FALSE}
 ## retention times:
-min.samples <- 3 # min. number of samples a peptide must be identified in to be used
+min.samples <- min(length(inputs), 3) # min. number of samples a peptide must be identified in to be used
 outlier.pct <- 1 # percentage of outliers to be removed
 rt.data <- psms[, c("sequence", "modifications", "retention_time")]
 rt.data$sample <- factor(run.ids, levels=seq_along(inputs))
