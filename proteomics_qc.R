@@ -43,15 +43,23 @@ if (length(args) > 0) {
 
   ## count number of MS2 spectra in each input file:
   ## (relevant line in mzML: <cvParam cvRef="MS" accession="MS:1000580" name="MSn spectrum" />)
-  mzml.dir <- "mzmlindexing/out"
-  n.ms2 <- sapply(args, function(dir) system2("grep", c("-c", "MS:1000580", file.path(dir, mzml.dir, "*.mzML")),
-                                              stdout=TRUE))
+  n.ms2 <- sapply(args, function(dir) {
+    ## location of mzML files varies between mzML and raw input:
+    mzml.dir <- file.path(dir, "thermorawfileparser") # raw input
+    if (!dir.exists(mzml.dir))
+      mzml.dir <- file.path(dir, "mzmlindexing/out") # mzML input
+    system2("grep", c("-c", "MS:1000580", file.path(mzml.dir, "*.mzML")), stdout=TRUE)
+  })
   n.ms2 <- as.integer(n.ms2)
 
   cat("Merging mzTab data...\n")
   mztab.paths <- file.path(args, "proteomicslfq/out.mzTab")
   merged <- merge.mztab.files(mztab.paths)
-  merged <- annotate.ms.runs(merged, n.ms2, paste0(samples, ".mzML"))
+  ## replace "ms_run[...]-location" entries?
+  locations <- unlist(merged@Metadata[grep("^ms_run\\[\\d+\\]-location$", names(merged@Metadata))])
+  paths <- if (any(duplicated(locations))) paste0(samples, ".mzML") else NULL
+  ## add MS2 counts to metadata, replace locations if necessary:
+  merged <- annotate.ms.runs(merged, n.ms2, paths)
 
   if (!is.null(first.mztab)) {
     cat("Merging with previous mzTab file...\n")
