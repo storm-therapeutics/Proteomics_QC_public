@@ -31,3 +31,7 @@ The second call does the same, but merges the results with an existing mzTab fil
 This saves processing time when new samples are compared to older ones.  
 The third call recreates the QC report from an existing mzTab file.
 This is useful when the report format has changed.
+
+### 3. `qc_report.Rmd`
+[R Markdown](https://bookdown.org/yihui/rmarkdown/) file containing code and text for the QC report.
+Using a (merged) mzTab file for input data, this gets rendered to an HTML file by the `proteomics_qc.R` script.
